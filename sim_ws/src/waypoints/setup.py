@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'waypoint_logger'
+package_name = 'waypoints'
 
 setup(
     name=package_name,
@@ -20,7 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'waypoint_logger = waypoint_logger.waypoint_logger:main'
+            'waypoint_logger = waypoints.waypoint_logger:main'
         ],
     },
 )

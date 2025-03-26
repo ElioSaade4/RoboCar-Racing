@@ -10,14 +10,15 @@ from numpy import linalg as LA
 from nav_msgs.msg import Odometry
 
 home = expanduser('~')
-file = open( './src/waypoint_logger/waypoints.csv', 'w' )
+file = open( './src/waypoints/waypoints.csv', 'w' )
 file.write( 'x, y, yaw, v\n' )
 
-class MinimalSubscriber(Node):
+
+class WaypointsLogger(Node):
 
     def __init__(self):
 
-        super().__init__('minimal_subscriber')
+        super().__init__('waypoint_logger')
         self.subscription = self.create_subscription(
             Odometry,
             'ego_racecar/odom',
@@ -54,23 +55,23 @@ class MinimalSubscriber(Node):
         
 def shutdown():
     file.close()
-    print('Goodbye')
+    print( 'Waypoints Logger stopped.' )
 
     
 def main(args=None):
 
-    atexit.register(shutdown)
+    atexit.register( shutdown )
 
     rclpy.init(args=args)
 
-    minimal_subscriber = MinimalSubscriber()
+    subscriber = WaypointsLogger()
 
-    rclpy.spin(minimal_subscriber)
+    rclpy.spin( subscriber )
 
     # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
     # when the garbage collector destroys the node object)
-    minimal_subscriber.destroy_node()
+    subscriber.destroy_node()
     rclpy.shutdown()
 
 
