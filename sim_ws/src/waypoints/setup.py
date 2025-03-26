@@ -20,7 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'waypoint_logger = waypoints.waypoint_logger:main'
+            'waypoint_logger = waypoints.waypoint_logger:main',
+            'waypoints_marker = waypoints.waypoints_marker:main'
         ],
     },
 )
