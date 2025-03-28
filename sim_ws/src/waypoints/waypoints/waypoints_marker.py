@@ -1,10 +1,12 @@
 import rclpy
-import csv
+import numpy as np
+import pandas as pd
 from rclpy.node import Node
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
-# import pandas as pd
+from nav_msgs.msg import Odometry
+
 
 class WaypointsMarker(Node):
 
@@ -12,39 +14,51 @@ class WaypointsMarker(Node):
 
         super().__init__('waypoints_marker')
         
-        # Declare parameter for CSV file
-        self.declare_parameter('csv_file', './src/waypoints/waypoints.csv')
-        csv_file_path = self.get_parameter('csv_file').value
-        
         self.line_pub = self.create_publisher( Marker, 'line_marker', 10 )
         self.point_pub = self.create_publisher( Marker, 'waypoint_marker', 10 )
+
+        self.subscription = self.create_subscription(
+            Odometry,
+            'ego_racecar/odom',
+            self.updateOdom,
+            10)
+        
+        self.pose_x = 0.0
+        self.pose_y = 0.0
         
         # Read and parse CSV file
-        self.points = self.read_csv( csv_file_path )
+        df = pd.read_csv( './src/waypoints/waypoints.csv' )
+        self.x = df[ 'x' ].to_numpy()
+        self.y = df[ ' y' ].to_numpy()
+        self.points = self.generateRaceLine()
         
         # Publish marker periodically
-        self.timer = self.create_timer( 0.2, self.publishMarkers )
+        self.timer1 = self.create_timer( 1, self.publishRaceLine )
+        self.timer2 = self.create_timer( 0.2, self.publishWaypoint )
 
         print( 'Waypoints loaded, publishing...' )
     
 
-    def read_csv(self, file_path):
+    def updateOdom( self, msg ):
+        self.pose_x = msg.pose.pose.position.x
+        self.pose_y = msg.pose.pose.position.y
+    
+    
+    def generateRaceLine(self):
+
         points = []
-        try:
-            with open(file_path, 'r') as file:
-                reader = csv.reader(file)
-                next(reader)  # Skip header if exists
-                for row in reader:
-                    x, y = map(float, row[ 0:2 ] )
-                    point = Point()
-                    point.x, point.y, point.z = x, y, 0.0  # Set z = 0 for 2D
-                    points.append(point)
-        except Exception as e:
-            self.get_logger().error(f"Error reading CSV file: {e}")
+
+        for i in range( len( self.x ) ):
+            point = Point()
+            point.x = self.x[ i ]
+            point.y = self.y[ i ]
+            point.z = 0.0  # Set z = 0 for 2D
+            points.append(point)
+
         return points
 
 
-    def publishLine(self):
+    def publishRaceLine(self):
 
         marker = Marker()
         marker.header.frame_id = "map"  # Change frame if needed
@@ -67,7 +81,17 @@ class WaypointsMarker(Node):
         self.line_pub.publish(marker)
 
     
-    def publishPoint( self ):
+    def publishWaypoint( self ):
+
+        d = np.sqrt( ( self.x - self.pose_x ) ** 2 + ( self.y - self.pose_y ) ** 2 )
+        i = np.argmin( d )
+
+        while True:
+            i = ( i + 1 ) % 253
+
+            if d[ i ] > 2:
+                i = ( i + 253 ) % 253
+                break
 
         marker = Marker()
         marker.header.frame_id = "map"  # Change frame if needed
@@ -77,8 +101,8 @@ class WaypointsMarker(Node):
         marker.type = Marker.SPHERE
         marker.action = Marker.ADD
 
-        marker.pose.position.x = 0.0
-        marker.pose.position.y = 0.0
+        marker.pose.position.x = self.x[i]
+        marker.pose.position.y = self.y[i]
         marker.pose.position.z = 0.0
 
         marker.scale.x = 0.25  
@@ -93,13 +117,6 @@ class WaypointsMarker(Node):
         marker.lifetime.nanosec = 0
 
         self.point_pub.publish(marker)
-
-    
-    def publishMarkers( self ):
-
-        self.publishLine()
-        self.publishPoint()
-
 
 
 def main(args=None):
