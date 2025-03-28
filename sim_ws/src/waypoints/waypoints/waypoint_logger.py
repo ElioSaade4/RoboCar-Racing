@@ -10,8 +10,8 @@ from numpy import linalg as LA
 from nav_msgs.msg import Odometry
 
 home = expanduser('~')
-file = open( './src/waypoints/waypoints.csv', 'w' )
-file.write( 'x, y, yaw, v\n' )
+file = open( './src/waypoints/waypoints_log.csv', 'w' )
+file.write( 'x,y,yaw,v\n' )
 
 
 class WaypointsLogger(Node):
