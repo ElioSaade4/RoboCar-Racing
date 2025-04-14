@@ -29,7 +29,7 @@ class WaypointsMarker(Node):
         # Read and parse CSV file
         df = pd.read_csv( './src/waypoints/waypoints.csv' )
         self.x = df[ 'x' ].to_numpy()
-        self.y = df[ ' y' ].to_numpy()
+        self.y = df[ 'y' ].to_numpy()
         self.points = self.generateRaceLine()
         
         # Publish marker periodically
