@@ -16,7 +16,9 @@ from ackermann_msgs.msg import AckermannDriveStamped
 
 @dataclass
 class MPCConfig:
-
+    """
+    Dataclass that includes all the configuration parameters for the MPC
+    """
     NXK: int = 4    # length of state vector: z = [x, y, v, yaw]
     NU: int = 2     # length of control input vector: u =  [steering angle, acceleration]
     TK: int = 8     # length of finite horizon
@@ -107,8 +109,8 @@ class MPC( Node ):
         """
 
         # Extract pose from ROS pose msg  
-        x = odom_msg.pose.pose.position.x
-        y = odom_msg.pose.pose.position.y
+        # x = odom_msg.pose.pose.position.x
+        # y = odom_msg.pose.pose.position.y
         v = np.linalg.norm(np.array( [ odom_msg.twist.twist.linear.x, 
                                        odom_msg.twist.twist.linear.y, 
                                        odom_msg.twist.twist.linear.z ] ), 2 )
@@ -121,11 +123,19 @@ class MPC( Node ):
         cosy_cosp = 1 - 2 * (q_y * q_y + q_z * q_z)
         yaw = np.arctan2( siny_cosp, cosy_cosp )    # Yaw angle from quaternion
 
+        # Transform from rear axle of the car to CoG
+        x = odom_msg.pose.pose.position.x + ( 0.165 * math.cos( yaw ) )
+        y = odom_msg.pose.pose.position.y + ( 0.165 * math.sin( yaw ) )
+
         # Update state vector
         self.state = [ x, y, v, yaw ]
 
     
     def mpcCallback( self ):
+        """
+        Callback function for the MPC timer that runs at a period of 0.1s.
+        This function solves the MPC problem at every iteration and published the steering and speed commands.
+        """
 
         # Calculate the reference states for the finite horizon
         ref_states = self.calcRefStates()
@@ -280,15 +290,19 @@ class MPC( Node ):
         return ref_states
 
 
-    def getModelMatrices(self, v, phi, delta):
+    def getModelMatrices( self, v, phi, delta ):
         """
-        Calc linear and discrete time dynamic model-> Explicit discrete time-invariant
-        Linear System: Xdot = Ax +Bu + C
-        State vector: x=[x, y, v, yaw]
-        :param v: speed
-        :param phi: heading angle of the vehicle
-        :param delta: steering angle: delta_bar
-        :return: A, B, C
+        Calculates the linearized model matrices A, B and C evaluated around a given speed, heading and steering angle.
+
+        Args:
+            v ( float ): speed (m/s)
+            phi ( float ): heading angle (rad)
+            delta ( float ): steering angle (rad)
+
+        Returns:
+            A: A matrix of the linearized model evaluated around v, phi and delta
+            B: B matrix of the linearized model evaluated around v, phi and delta
+            C: C matrix of the linearized model evaluated around v, phi and delta
         """
 
         # State (or system) matrix A, 4x4
@@ -440,9 +454,9 @@ class MPC( Node ):
         marker.pose.position.y = y
         marker.pose.position.z = 0.0
 
-        marker.scale.x = 0.15  
+        marker.scale.x = 0.15 
         marker.scale.y = 0.15 
-        marker.scale.z = 0.15 
+        marker.scale.z = 0.15
 
         # Set color (RGBA)
         marker.color = ColorRGBA( r = 0.0, g = 1.0, b = 1.0, a = 1.0 )

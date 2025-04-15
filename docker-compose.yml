@@ -31,6 +31,8 @@ services:
       - DISPLAY=novnc:0.0
     networks:
       - x11
+    ports:
+      - "0.0.0.0:8765:8765"
     stdin_open: true
     tty: true 
   novnc:  

@@ -32,7 +32,9 @@ RUN apt-get update --fix-missing && \
                        python3-pip \
                        libeigen3-dev \
                        tmux \
-                       ros-iron-rviz2
+                       ros-iron-rviz2 \
+                       ros-iron-foxglove-bridge
+                       
 RUN apt-get -y dist-upgrade
 RUN pip3 install transforms3d
 
