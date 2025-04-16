@@ -13,6 +13,8 @@ from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 from ackermann_msgs.msg import AckermannDriveStamped
 
+from std_msgs.msg import Float32
+
 
 @dataclass
 class MPCConfig:
@@ -25,16 +27,16 @@ class MPCConfig:
 
     # Cost function matrices
     R: list = field(
-        default_factory = lambda: np.diag( [ 0.01, 50 ] ) 
-    )  # input cost matrix, penalty for inputs - [accel, steering_speed]
+        default_factory = lambda: np.diag( [ 5.0, 85.0 ] ) 
+    )  # input cost matrix, penalty for inputs - [accel, steering]
     Rd: list = field(
-        default_factory = lambda: np.diag( [ 0.01, 100.0 ] )
-    )  # input difference cost matrix, penalty for change of inputs - [accel, steering_speed]
+        default_factory = lambda: np.diag( [ 5.0, 85.0 ] ) # maybe 100.0 for steering
+    )  # input difference cost matrix, penalty for change of inputs - [accel, steering]
     Q: list = field(
-        default_factory = lambda: np.diag( [ 13.5, 13.5, 5.5, 13.0 ] )
+        default_factory = lambda: np.diag( [ 20, 20, 5.5, 20 ] )
     )  # state error cost matrix
     Qf: list = field(
-        default_factory = lambda: np.diag( [ 13.5, 13.5, 5.5, 13.0 ] )
+        default_factory = lambda: np.diag( [ 20, 20, 5.5, 20 ] )
     )  # final state error matrix, penalty
 
     DT: float = 0.1            # time step [s] kinematic
@@ -71,8 +73,10 @@ class MPC( Node ):
         self.mpc_pub = self.create_publisher( Marker, 'mpc_markers', 10 )
         self.pose_pub = self.create_publisher( Marker, 'pose_markers', 10 )
 
+        self.dt_pub = self.create_publisher( Float32, 'delta_t', 10 )
+
         # Load waypoints from csv file
-        df = pd.read_csv( './src/waypoints/waypoints_95.csv' )
+        df = pd.read_csv( './src/waypoints/newwaypoints.csv' )
         self.waypoints_x = df[ 'x' ]
         self.waypoints_y = df[ 'y' ]
         self.waypoints_v = df[ 'v' ]
@@ -85,6 +89,8 @@ class MPC( Node ):
         self.mpc_steer = None     
         self.mpc_a = None
 
+        self.steer_cmd = 0.0
+
         # Initialize MPC problem
         self.config = MPCConfig()
         self.mpcProblemInit()
@@ -92,11 +98,7 @@ class MPC( Node ):
         # Start timer for MPC controller
         self.timer1 = self.create_timer( self.config.DT, self.mpcCallback )   
 
-        # self.prev_time = self.get_clock().now()
-        # end_time = self.get_clock().now()
-        # time_diff = end_time - self.prev_time
-        # print( time_diff.nanoseconds / 1e6 )
-        # self.prev_time = end_time  
+        self.prev_time = self.get_clock().now()
 
 
     def poseCallback( self, odom_msg ):
@@ -137,6 +139,14 @@ class MPC( Node ):
         This function solves the MPC problem at every iteration and published the steering and speed commands.
         """
 
+        # Publish time difference between calls to mpcCallback(). Used to monitor "real-time" of ROS timer
+        end_time = self.get_clock().now()
+        time_diff = end_time - self.prev_time
+        dt_msg = Float32()
+        dt_msg.data = time_diff.nanoseconds / 1e6
+        self.dt_pub.publish( dt_msg )
+        self.prev_time = end_time  
+
         # Calculate the reference states for the finite horizon
         ref_states = self.calcRefStates()
         x0 = self.state
@@ -144,20 +154,21 @@ class MPC( Node ):
         # Solve MPC control problem
         self.mpc_a, self.mpc_steer, mpc_x, mpc_y, _, _, = self.mpcSolve( ref_states, x0 )
 
-        # Publish messages to display points in RVIZ
+        # Publish messages to display points
         self.displayRefPath( ref_states )
         self.displayPose( x0[0], x0[1] )
         self.displayPathPredict( mpc_x, mpc_y )
 
         # Publish drive message
-        steer_cmd = self.mpc_steer[0]
+        self.steer_cmd = self.mpc_steer[0]
         speed_cmd = self.state[ 2 ] + ( self.mpc_a[ 0 ] * self.config.DT )
 
         drive_msg = AckermannDriveStamped()
         drive_msg.header.stamp = self.get_clock().now().to_msg()
         drive_msg.header.frame_id = "drive_frame" 
         drive_msg.drive.speed = speed_cmd
-        drive_msg.drive.steering_angle = steer_cmd 
+        drive_msg.drive.steering_angle = self.steer_cmd 
+        drive_msg.drive.acceleration = self.mpc_a[ 0 ]
         self.drive_publisher.publish( drive_msg )
 
         
@@ -196,9 +207,13 @@ class MPC( Node ):
         # Objective part 2: deviation of final state from reference trajectory weighted by Qf
         objective += cvxpy.quad_form( self.xk[:, self.config.TK ] - self.ref_traj_k[ :,self.config.TK ], self.config.Qf )
 
-        # Objective part 3: Influence of the control inputs: Inputs u multiplied by the penalty R
+        # Objective part 3: Influence of the control inputs: Inputs u weighted by R
         for k in range( self.config.TK ):
             objective += cvxpy.quad_form( self.uk[ :, k ], self.config.R )
+
+        # Objective part 4: Penalty on change in control input weighted by Rd (for smoother control commands)
+        for k in range( self.config.TK - 1 ):
+            objective += cvxpy.quad_form( self.uk[ :, k + 1 ] - self.uk[ :, k ], self.config.Rd )
 
         # Intialize parameters to stores linearized model matrices A, B, C for every time step
         self.Ak = cvxpy.Parameter( ( self.config.NXK, self.config.TK * self.config.NXK ) ) 
@@ -216,17 +231,11 @@ class MPC( Node ):
         # Linearized state equation constraint
         for k in range( self.config.TK ):
             constraints += [ self.xk[ :,k+1] == self.Ak[ :, k*4:(k+1)*4 ] @ self.xk[:,k] + self.Bk[ :, k*2:(k+1)*2 ] @ self.uk[:,k] + self.Ck[ :, k ] ]
-        
-        # TODO: Constraint part 2:
-        #       Add constraints on steering, change in steering angle
-        #       cannot exceed steering angle speed limit. Should be based on:
-        #       self.uk, self.config.MAX_DSTEER, self.config.DTK
-
 
         # Constraints for upper and lower bounds of states and inputs
         x_min = np.array( [ -17, -2, self.config.MIN_SPEED, -math.pi ] )
         x_max = np.array( [ 11, 10, self.config.MAX_SPEED, math.pi ] )
-        u_min = np.array( [ 0, self.config.MIN_STEER ] )
+        u_min = np.array( [ -self.config.MAX_ACCEL, self.config.MIN_STEER ] )
         u_max = np.array( [ self.config.MAX_ACCEL, self.config.MAX_STEER ] )
         
         for k in range( self.config.TK ):
@@ -307,25 +316,25 @@ class MPC( Node ):
 
         # State (or system) matrix A, 4x4
         A = np.zeros( ( self.config.NXK, self.config.NXK ) )
-        A[0, 0] = 1.0
-        A[1, 1] = 1.0
-        A[2, 2] = 1.0
-        A[3, 3] = 1.0
-        A[0, 2] = self.config.DT * math.cos(phi)
-        A[0, 3] = -self.config.DT * v * math.sin(phi)
-        A[1, 2] = self.config.DT * math.sin(phi)
-        A[1, 3] = self.config.DT * v * math.cos(phi)
-        A[3, 2] = self.config.DT * math.tan(delta) / self.config.WB
+        A[ 0, 0 ] = 1.0
+        A[ 1, 1 ] = 1.0
+        A[ 2, 2 ] = 1.0
+        A[ 3, 3 ] = 1.0
+        A[ 0, 2 ] = self.config.DT * math.cos( phi )
+        A[ 0, 3 ] = -self.config.DT * v * math.sin( phi )
+        A[ 1, 2 ] = self.config.DT * math.sin( phi )
+        A[ 1, 3 ] = self.config.DT * v * math.cos( phi )
+        A[ 3, 2 ] = self.config.DT * math.tan( delta ) / self.config.WB
 
         # Input Matrix B; 4x2
-        B = np.zeros((self.config.NXK, self.config.NU))
-        B[2, 0] = self.config.DT
-        B[3, 1] = self.config.DT * v / (self.config.WB * math.cos(delta) ** 2)
+        B = np.zeros( ( self.config.NXK, self.config.NU ) )
+        B[ 2, 0 ] = self.config.DT
+        B[ 3, 1 ] = self.config.DT * v / ( self.config.WB * math.cos( delta ) ** 2 )
 
         C = np.zeros( ( self.config.NXK, 1 ) )
-        C[0] = self.config.DT * v * math.sin(phi) * phi
-        C[1] = -self.config.DT * v * math.cos(phi) * phi
-        C[3] = -self.config.DT * v * delta / (self.config.WB * math.cos(delta) ** 2)
+        C[ 0 ] = self.config.DT * v  * phi * math.sin( phi )
+        C[ 1 ] = -self.config.DT * v * phi * math.cos( phi )
+        C[ 3 ] = -self.config.DT * v * delta / ( self.config.WB * math.cos( delta ) ** 2 )
 
         return A, B, C
 
@@ -339,7 +348,7 @@ class MPC( Node ):
         Ck = np.zeros( ( self.config.NXK, self.config.TK ) )
 
         for k in range( self.config.TK ):
-            A, B, C = self.getModelMatrices( ref_traj[ 2, k ], ref_traj[ 3, k ], 0.0 )
+            A, B, C = self.getModelMatrices( ref_traj[ 2, k ], ref_traj[ 3, k ], self.steer_cmd ) 
             Ak[ :, k*4:(k+1)*4 ] = A
             Bk[ :, k*2:(k+1)*2 ] = B
             Ck[ :, k ] = C.T

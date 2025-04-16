@@ -103,3 +103,15 @@ To start the MPC controller, open a new bash session and type the following comm
 ```
 ros2 run mpc mpc
 ```
+
+## Start live telemetry with Foxglove
+```
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+```
+
+## Record a ROS2 Bag to replay in Foxglove
+```
+ros2 bag record -a -o recording
+
+```
+where recording is the folder/file name
