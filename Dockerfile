@@ -54,5 +54,8 @@ RUN source /opt/ros/iron/setup.bash && \
     rosdep install -i --from-path src --rosdistro iron -y && \
     colcon build
 
+RUN cd sim_ws/ && \
+    pip install pandas==1.5.0
+
 WORKDIR '/sim_ws'
 ENTRYPOINT ["/bin/bash"]

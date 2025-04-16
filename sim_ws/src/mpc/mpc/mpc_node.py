@@ -7,13 +7,12 @@ import cvxpy
 import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
+from std_msgs.msg import Float32
 from nav_msgs.msg import Odometry
 from std_msgs.msg import ColorRGBA
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 from ackermann_msgs.msg import AckermannDriveStamped
-
-from std_msgs.msg import Float32
 
 
 @dataclass
