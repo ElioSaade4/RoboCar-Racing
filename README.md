@@ -97,3 +97,31 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ![alt text](https://private-user-images.githubusercontent.com/98316521/417862046-43141718-ea81-45d1-b8ce-6f19bdc9e388.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDA3MTE5ODMsIm5iZiI6MTc0MDcxMTY4MywicGF0aCI6Ii85ODMxNjUyMS80MTc4NjIwNDYtNDMxNDE3MTgtZWE4MS00NWQxLWI4Y2UtNmYxOWJkYzllMzg4LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAyMjglMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMjI4VDAzMDEyM1omWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTk3M2MyZTNjYjc1YmRhYmFhOGQyYjA4YzYzY2Y5Yzg3N2Q2ZTI3YzY0ZGEyNmYxMGNjN2M4OTFmYjZkM2U3ZWUmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.H4xAPfTPlsoogjp5vjxrgPoZ0s40rEA9_gEeSmNVQtQ)
 
 The car can be moved by clicking on keyboard keys while in this session as described in the image.
+
+## Run the waypoints_logger node
+```
+ros2 run waypoints waypoints_logger
+```
+
+## Run the waypoints_marker node
+```
+ros2 run waypoints waypoints_marker
+```
+
+## Run the MPC node
+To start the MPC controller, open a new bash session and type the following command:
+```
+ros2 run mpc mpc_node
+```
+
+## Start live telemetry with Foxglove
+```
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+```
+
+## Record a ROS2 Bag to replay in Foxglove
+```
+ros2 bag record -a -o recording
+
+```
+where recording is the folder/file name

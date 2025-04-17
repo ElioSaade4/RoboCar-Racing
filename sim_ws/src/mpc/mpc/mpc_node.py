@@ -7,6 +7,7 @@ import cvxpy
 import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
+from std_msgs.msg import Float32
 from nav_msgs.msg import Odometry
 from std_msgs.msg import ColorRGBA
 from geometry_msgs.msg import Point
@@ -16,23 +17,25 @@ from ackermann_msgs.msg import AckermannDriveStamped
 
 @dataclass
 class MPCConfig:
-
+    """
+    Dataclass that includes all the configuration parameters for the MPC
+    """
     NXK: int = 4    # length of state vector: z = [x, y, v, yaw]
     NU: int = 2     # length of control input vector: u =  [steering angle, acceleration]
-    TK: int = 8     # length of finite horizon
+    N: int = 6     # length of finite horizon
 
     # Cost function matrices
     R: list = field(
-        default_factory = lambda: np.diag( [ 0.01, 50 ] ) 
-    )  # input cost matrix, penalty for inputs - [accel, steering_speed]
+        default_factory = lambda: np.diag( [ 5.0, 85.0 ] ) 
+    )  # input cost matrix, penalty for inputs - [accel, steering]
     Rd: list = field(
-        default_factory = lambda: np.diag( [ 0.01, 100.0 ] )
-    )  # input difference cost matrix, penalty for change of inputs - [accel, steering_speed]
+        default_factory = lambda: np.diag( [ 5.0, 85.0 ] ) # maybe 100.0 for steering
+    )  # input difference cost matrix, penalty for change of inputs - [accel, steering]
     Q: list = field(
-        default_factory = lambda: np.diag( [ 13.5, 13.5, 5.5, 13.0 ] )
+        default_factory = lambda: np.diag( [ 20, 20, 5.5, 20 ] )
     )  # state error cost matrix
     Qf: list = field(
-        default_factory = lambda: np.diag( [ 13.5, 13.5, 5.5, 13.0 ] )
+        default_factory = lambda: np.diag( [ 20, 20, 5.5, 20 ] )
     )  # final state error matrix, penalty
 
     DT: float = 0.1            # time step [s] kinematic
@@ -49,6 +52,9 @@ class MPCConfig:
 
 
 class MPC( Node ):
+    """
+    Class that defines a ROS2 node which implements a Model Predictive Controller to track a reference trajcetory.
+    """
 
     def __init__( self ):
         """
@@ -58,19 +64,17 @@ class MPC( Node ):
         super().__init__( 'mpc_node' )
 
         # Create ROS subscribers and publishers
-        self.odom_subscriber = self.create_subscription( Odometry, 
-                                                        'ego_racecar/odom',
-                                                        self.poseCallback,
-                                                        10 )
+        self.odom_subscriber = self.create_subscription( Odometry, 'ego_racecar/odom', self.odomCallback, 10 )
         
         self.drive_publisher = self.create_publisher( AckermannDriveStamped, '/drive', 10 )
 
         self.ref_pub = self.create_publisher( Marker, 'ref_markers', 10 )
         self.mpc_pub = self.create_publisher( Marker, 'mpc_markers', 10 )
-        self.pose_pub = self.create_publisher( Marker, 'pose_markers', 10 )
 
-        # Load waypoints from csv file
-        df = pd.read_csv( './src/waypoints/waypoints_95.csv' )
+        self.dt_pub = self.create_publisher( Float32, 'delta_t', 10 )
+
+        # Load reference waypoints from csv file
+        df = pd.read_csv( './src/waypoints/waypoints_Levine_2.csv' )
         self.waypoints_x = df[ 'x' ]
         self.waypoints_y = df[ 'y' ]
         self.waypoints_v = df[ 'v' ]
@@ -83,6 +87,8 @@ class MPC( Node ):
         self.mpc_steer = None     
         self.mpc_a = None
 
+        self.steer_cmd = 0.0
+
         # Initialize MPC problem
         self.config = MPCConfig()
         self.mpcProblemInit()
@@ -90,14 +96,10 @@ class MPC( Node ):
         # Start timer for MPC controller
         self.timer1 = self.create_timer( self.config.DT, self.mpcCallback )   
 
-        # self.prev_time = self.get_clock().now()
-        # end_time = self.get_clock().now()
-        # time_diff = end_time - self.prev_time
-        # print( time_diff.nanoseconds / 1e6 )
-        # self.prev_time = end_time  
+        self.prev_time = self.get_clock().now()
 
 
-    def poseCallback( self, odom_msg ):
+    def odomCallback( self, odom_msg ):
         """
         Callback function for the Odometry topic subscriber. 
         Extracts position, orientation and speed from the Odometry message.
@@ -107,8 +109,8 @@ class MPC( Node ):
         """
 
         # Extract pose from ROS pose msg  
-        x = odom_msg.pose.pose.position.x
-        y = odom_msg.pose.pose.position.y
+        # x = odom_msg.pose.pose.position.x
+        # y = odom_msg.pose.pose.position.y
         v = np.linalg.norm(np.array( [ odom_msg.twist.twist.linear.x, 
                                        odom_msg.twist.twist.linear.y, 
                                        odom_msg.twist.twist.linear.z ] ), 2 )
@@ -121,11 +123,27 @@ class MPC( Node ):
         cosy_cosp = 1 - 2 * (q_y * q_y + q_z * q_z)
         yaw = np.arctan2( siny_cosp, cosy_cosp )    # Yaw angle from quaternion
 
+        # Transform from rear axle of the car to CoG
+        x = odom_msg.pose.pose.position.x + ( 0.165 * math.cos( yaw ) )
+        y = odom_msg.pose.pose.position.y + ( 0.165 * math.sin( yaw ) )
+
         # Update state vector
         self.state = [ x, y, v, yaw ]
 
     
     def mpcCallback( self ):
+        """
+        Callback function for the MPC timer that runs at a period of 0.1s.
+        This function solves the MPC problem at every iteration and published the steering and speed commands.
+        """
+
+        # Publish time difference between calls to mpcCallback(). Used to monitor "real-time" of ROS timer
+        end_time = self.get_clock().now()
+        time_diff = end_time - self.prev_time
+        dt_msg = Float32()
+        dt_msg.data = time_diff.nanoseconds / 1e6
+        self.dt_pub.publish( dt_msg )
+        self.prev_time = end_time  
 
         # Calculate the reference states for the finite horizon
         ref_states = self.calcRefStates()
@@ -134,20 +152,20 @@ class MPC( Node ):
         # Solve MPC control problem
         self.mpc_a, self.mpc_steer, mpc_x, mpc_y, _, _, = self.mpcSolve( ref_states, x0 )
 
-        # Publish messages to display points in RVIZ
+        # Publish messages to display points
         self.displayRefPath( ref_states )
-        self.displayPose( x0[0], x0[1] )
-        self.displayPathPredict( mpc_x, mpc_y )
+        self.displayMPCPath( mpc_x, mpc_y )
 
         # Publish drive message
-        steer_cmd = self.mpc_steer[0]
+        self.steer_cmd = self.mpc_steer[0]
         speed_cmd = self.state[ 2 ] + ( self.mpc_a[ 0 ] * self.config.DT )
 
         drive_msg = AckermannDriveStamped()
         drive_msg.header.stamp = self.get_clock().now().to_msg()
         drive_msg.header.frame_id = "drive_frame" 
         drive_msg.drive.speed = speed_cmd
-        drive_msg.drive.steering_angle = steer_cmd 
+        drive_msg.drive.steering_angle = self.steer_cmd 
+        drive_msg.drive.acceleration = self.mpc_a[ 0 ]
         self.drive_publisher.publish( drive_msg )
 
         
@@ -163,69 +181,67 @@ class MPC( Node ):
         """
         
         # Variable for predicted states
-        self.xk = cvxpy.Variable( ( self.config.NXK, self.config.TK + 1) )
+        self.xk = cvxpy.Variable( ( self.config.NXK, self.config.N + 1) )
         
         # Variable for control inputs
-        self.uk = cvxpy.Variable( (self.config.NU, self.config.TK) )
+        self.uk = cvxpy.Variable( (self.config.NU, self.config.N) )
 
         # Initialize reference vectors
         self.x0k = cvxpy.Parameter( ( self.config.NXK, ) )
         self.x0k.value = np.zeros( (self.config.NXK, ) )
 
         # Initialize reference trajectory parameter
-        self.ref_traj_k = cvxpy.Parameter( ( self.config.NXK, self.config.TK + 1 ) )
-        self.ref_traj_k.value = np.zeros( ( self.config.NXK, self.config.TK + 1 ) )
+        self.ref_traj_k = cvxpy.Parameter( ( self.config.NXK, self.config.N ) )
+        self.ref_traj_k.value = np.zeros( ( self.config.NXK, self.config.N ) )
 
         objective = 0.0     # Objective value of the optimization problem
         constraints = []    # Constraints array
 
         # Objective part 1: deviation of state from reference trajectory weighted by Q, except final time step
-        for k in range( self.config.TK ):
-            objective += cvxpy.quad_form( self.xk[:,k] - self.ref_traj_k[:,k], self.config.Q )
+        for k in range( 1, self.config.N ):
+            objective += cvxpy.quad_form( self.xk[:,k] - self.ref_traj_k[:,k-1], self.config.Q )
         
         # Objective part 2: deviation of final state from reference trajectory weighted by Qf
-        objective += cvxpy.quad_form( self.xk[:, self.config.TK ] - self.ref_traj_k[ :,self.config.TK ], self.config.Qf )
+        objective += cvxpy.quad_form( self.xk[:, self.config.N ] - self.ref_traj_k[ :, self.config.N - 1 ], self.config.Qf )
 
-        # Objective part 3: Influence of the control inputs: Inputs u multiplied by the penalty R
-        for k in range( self.config.TK ):
+        # Objective part 3: Influence of the control inputs: Inputs u weighted by R
+        for k in range( self.config.N ):
             objective += cvxpy.quad_form( self.uk[ :, k ], self.config.R )
 
+        # Objective part 4: Penalty on change in control input weighted by Rd (for smoother control commands)
+        for k in range( self.config.N - 1 ):
+            objective += cvxpy.quad_form( self.uk[ :, k + 1 ] - self.uk[ :, k ], self.config.Rd )
+
         # Intialize parameters to stores linearized model matrices A, B, C for every time step
-        self.Ak = cvxpy.Parameter( ( self.config.NXK, self.config.TK * self.config.NXK ) ) 
-        self.Ak.value = np.zeros( ( self.config.NXK, self.config.TK * self.config.NXK ) )
+        self.Ak = cvxpy.Parameter( ( self.config.NXK, self.config.N * self.config.NXK ) ) 
+        self.Ak.value = np.zeros( ( self.config.NXK, self.config.N * self.config.NXK ) )
 
-        self.Bk = cvxpy.Parameter( ( self.config.NXK, self.config.TK * self.config.NU ) )
-        self.Bk.value = np.zeros( ( self.config.NXK, self.config.TK * self.config.NU ) )
+        self.Bk = cvxpy.Parameter( ( self.config.NXK, self.config.N * self.config.NU ) )
+        self.Bk.value = np.zeros( ( self.config.NXK, self.config.N * self.config.NU ) )
 
-        self.Ck = cvxpy.Parameter( ( self.config.NXK, self.config.TK ) )
-        self.Ck.value = np.zeros( ( self.config.NXK, self.config.TK ) )
+        self.Ck = cvxpy.Parameter( ( self.config.NXK, self.config.N ) )
+        self.Ck.value = np.zeros( ( self.config.NXK, self.config.N ) )
 
         # Initial state constraint
         constraints = [ self.xk[ :, 0 ] == self.x0k ]
 
         # Linearized state equation constraint
-        for k in range( self.config.TK ):
+        for k in range( self.config.N ):
             constraints += [ self.xk[ :,k+1] == self.Ak[ :, k*4:(k+1)*4 ] @ self.xk[:,k] + self.Bk[ :, k*2:(k+1)*2 ] @ self.uk[:,k] + self.Ck[ :, k ] ]
-        
-        # TODO: Constraint part 2:
-        #       Add constraints on steering, change in steering angle
-        #       cannot exceed steering angle speed limit. Should be based on:
-        #       self.uk, self.config.MAX_DSTEER, self.config.DTK
-
 
         # Constraints for upper and lower bounds of states and inputs
         x_min = np.array( [ -17, -2, self.config.MIN_SPEED, -math.pi ] )
         x_max = np.array( [ 11, 10, self.config.MAX_SPEED, math.pi ] )
-        u_min = np.array( [ 0, self.config.MIN_STEER ] )
+        u_min = np.array( [ -self.config.MAX_ACCEL, self.config.MIN_STEER ] )
         u_max = np.array( [ self.config.MAX_ACCEL, self.config.MAX_STEER ] )
         
-        for k in range( self.config.TK ):
+        for k in range( self.config.N ):
             constraints += [ x_min <= self.xk[:,k], self.xk[:,k] <= x_max]
             constraints += [u_min <= self.uk[:,k], self.uk[:,k] <= u_max]
 
         # Create minimization optimization problem 
         self.MPC_prob = cvxpy.Problem( cvxpy.Minimize( objective ), constraints )
-
+    
 
     def calcRefStates( self ):
         """
@@ -234,37 +250,23 @@ class MPC( Node ):
         Returns:
             ref_traj: 2-D array of reference states for the finite horizon
         """
-        # Create placeholder Arrays for the reference trajectory for T steps
-        ref_states = np.zeros( ( self.config.NXK, self.config.TK + 1 ) )
+        # Create placeholder Arrays for the reference trajectory for N steps
+        ref_states = np.zeros( ( self.config.NXK, self.config.N ) )
 
-        ncourse = len( self.waypoints_x )
+        n = len( self.waypoints_x )
 
         # Find nearest index/setpoint from where the trajectories are calculated
         # _, _, _, ind = nearest_point(np.array([state.x, state.y]), np.array([cx, cy]).T)
         d = np.sqrt( ( self.waypoints_x - self.state[ 0 ] ) ** 2 + ( self.waypoints_y - self.state[ 1 ] ) ** 2 )
         ind = np.argmin( d )
 
-        # Load the initial parameters from the setpoint into the trajectory
-        # MIGHT NOT NEED THIS
-        ref_states[ 0, 0 ] = self.waypoints_x[ ind ]
-        ref_states[ 1, 0 ] = self.waypoints_y[ ind ]
-        ref_states[ 2, 0 ] = self.waypoints_v[ ind ]
-        ref_states[ 3, 0 ] = self.waypoints_yaw[ ind ] 
+        while True:
+            ind = ( ind + 1 ) % n
+            if d[ ind ] >= 0.2 * self.config.N:
+                break
 
-        # based on current velocity, distance traveled on the ref line between time steps
-        travel = abs( self.state[ 2 ] ) * self.config.DT   # distance travelled per time step 0.1s
-        dind = travel / self.config.dlk         # equally space distance points in waypoints.csv
-
-        ind_list = int( ind ) + np.insert(            # get indices that moves the car travel distance
-        np.cumsum(np.repeat(1, self.config.TK)), 0, 0
-        ).astype(int)
-
-        # ind_list = int(ind) + np.insert(            # get indices that moves the car travel distance
-        #     np.cumsum(np.repeat(dind, self.config.TK)), 0, 0
-        # ).astype(int)
-        
-        # correct out of bounds indices (finish line points)
-        ind_list[ ind_list >= ncourse ] -= ncourse  
+        ind_list = np.array( range( ind - self.config.N + 1, ind + 1 ) )
+        ind_list[ ind_list < 0 ] += n 
 
         ref_states[ 0, : ] = self.waypoints_x[ ind_list ]
         ref_states[ 1, : ] = self.waypoints_y[ ind_list ]
@@ -280,52 +282,72 @@ class MPC( Node ):
         return ref_states
 
 
-    def getModelMatrices(self, v, phi, delta):
+    def getModelMatrices( self, v, phi, delta ):
         """
-        Calc linear and discrete time dynamic model-> Explicit discrete time-invariant
-        Linear System: Xdot = Ax +Bu + C
-        State vector: x=[x, y, v, yaw]
-        :param v: speed
-        :param phi: heading angle of the vehicle
-        :param delta: steering angle: delta_bar
-        :return: A, B, C
+        Calculates the linearized model matrices A, B and C evaluated around a given speed, heading and steering angle.
+
+        Args:
+            v ( float ): speed (m/s)
+            phi ( float ): heading angle (rad)
+            delta ( float ): steering angle (rad)
+
+        Returns:
+            A: A matrix of the linearized model evaluated around v, phi and delta
+            B: B matrix of the linearized model evaluated around v, phi and delta
+            C: C matrix of the linearized model evaluated around v, phi and delta
         """
 
         # State (or system) matrix A, 4x4
         A = np.zeros( ( self.config.NXK, self.config.NXK ) )
-        A[0, 0] = 1.0
-        A[1, 1] = 1.0
-        A[2, 2] = 1.0
-        A[3, 3] = 1.0
-        A[0, 2] = self.config.DT * math.cos(phi)
-        A[0, 3] = -self.config.DT * v * math.sin(phi)
-        A[1, 2] = self.config.DT * math.sin(phi)
-        A[1, 3] = self.config.DT * v * math.cos(phi)
-        A[3, 2] = self.config.DT * math.tan(delta) / self.config.WB
+        A[ 0, 0 ] = 1.0
+        A[ 1, 1 ] = 1.0
+        A[ 2, 2 ] = 1.0
+        A[ 3, 3 ] = 1.0
+        A[ 0, 2 ] = self.config.DT * math.cos( phi )
+        A[ 0, 3 ] = -self.config.DT * v * math.sin( phi )
+        A[ 1, 2 ] = self.config.DT * math.sin( phi )
+        A[ 1, 3 ] = self.config.DT * v * math.cos( phi )
+        A[ 3, 2 ] = self.config.DT * math.tan( delta ) / self.config.WB
 
         # Input Matrix B; 4x2
-        B = np.zeros((self.config.NXK, self.config.NU))
-        B[2, 0] = self.config.DT
-        B[3, 1] = self.config.DT * v / (self.config.WB * math.cos(delta) ** 2)
+        B = np.zeros( ( self.config.NXK, self.config.NU ) )
+        B[ 2, 0 ] = self.config.DT
+        B[ 3, 1 ] = self.config.DT * v / ( self.config.WB * math.cos( delta ) ** 2 )
 
         C = np.zeros( ( self.config.NXK, 1 ) )
-        C[0] = self.config.DT * v * math.sin(phi) * phi
-        C[1] = -self.config.DT * v * math.cos(phi) * phi
-        C[3] = -self.config.DT * v * delta / (self.config.WB * math.cos(delta) ** 2)
+        C[ 0 ] = self.config.DT * v  * phi * math.sin( phi )
+        C[ 1 ] = -self.config.DT * v * phi * math.cos( phi )
+        C[ 3 ] = -self.config.DT * v * delta / ( self.config.WB * math.cos( delta ) ** 2 )
 
         return A, B, C
 
 
-    def mpcSolve( self, ref_traj, x0 ):
+    def mpcSolve( self, ref_states, x0 ):
+        """
+        Solves one iteration of the MPC optimization problem given a reference trajectory and an initial state.
+
+        Args:
+            ref_states: 2-D array of reference states to follow in the finite horizon
+            x0: intial state of the car
+
+        Returns:
+            mpc_a: list of MPC acceleration control inputs for every step of the finite horizon
+            mpc_steer: list of MPC steering control inputs for every step of the finite horizon
+            mpc_x: list of MPC x coordinate states for every iteration of the finite horizon
+            mpc_y: list of MPC y coordinate states for every iteration of the finite horizon
+            mpc_v: list of MPC velocity states for every iteration of the finite horizon
+            mpc_yaw: list of MPC yaw angle states for every iteration of the finite horizon
+        """
         
+        # Update the x0k, Ak, Bk, Ck, ref_traj_k parameters for the optimization problem
         self.x0k.value = x0
 
-        Ak = np.zeros( ( self.config.NXK, self.config.TK * self.config.NXK ) )
-        Bk = np.zeros( ( self.config.NXK, self.config.TK * self.config.NU ) )
-        Ck = np.zeros( ( self.config.NXK, self.config.TK ) )
+        Ak = np.zeros( ( self.config.NXK, self.config.N * self.config.NXK ) )
+        Bk = np.zeros( ( self.config.NXK, self.config.N * self.config.NU ) )
+        Ck = np.zeros( ( self.config.NXK, self.config.N ) )
 
-        for k in range( self.config.TK ):
-            A, B, C = self.getModelMatrices( ref_traj[ 2, k ], ref_traj[ 3, k ], 0.0 )
+        for k in range( self.config.N ):
+            A, B, C = self.getModelMatrices( ref_states[ 2, k ], ref_states[ 3, k ], self.steer_cmd ) 
             Ak[ :, k*4:(k+1)*4 ] = A
             Bk[ :, k*2:(k+1)*2 ] = B
             Ck[ :, k ] = C.T
@@ -334,12 +356,12 @@ class MPC( Node ):
         self.Bk.value = Bk
         self.Ck.value = Ck
 
-        self.ref_traj_k.value = ref_traj
+        self.ref_traj_k.value = ref_states
 
         # Solve the optimization problem with OSQP solver
         self.MPC_prob.solve(solver=cvxpy.OSQP, verbose=False, warm_start=True)
 
-        # Check if optimization problem has a solution
+        # Check if optimization problem has a solution and store the result in output variables
         if (
             self.MPC_prob.status == cvxpy.OPTIMAL
             or self.MPC_prob.status == cvxpy.OPTIMAL_INACCURATE
@@ -359,7 +381,9 @@ class MPC( Node ):
 
 
     def displayRefPath( self, ref_path ):
-
+        """
+        Publishes a marker of the reference path in the finite horizon
+        """
         marker = Marker()
         marker.header.frame_id = "map"  # Change frame if needed
         marker.header.stamp = self.get_clock().now().to_msg()
@@ -369,7 +393,7 @@ class MPC( Node ):
         marker.action = Marker.ADD
 
         points = []
-        for i in range( self.config.TK ):
+        for i in range( self.config.N ):
             point = Point()
             point.x = ref_path[ 0, i ]
             point.y = ref_path[ 1, i ]
@@ -392,7 +416,10 @@ class MPC( Node ):
         self.ref_pub.publish(marker)
 
 
-    def displayPathPredict( self, mpc_x, mpc_y ):
+    def displayMPCPath( self, mpc_x, mpc_y ):
+        """
+        Publishes a marker of the MPC solution x and y coordinates in the finite horizon.
+        """
 
         marker = Marker()
         marker.header.frame_id = "map"  # Change frame if needed
@@ -403,7 +430,7 @@ class MPC( Node ):
         marker.action = Marker.ADD
 
         points = []
-        for i in range( self.config.TK ):
+        for i in range( self.config.N ):
             point = Point()
             point.x = mpc_x[ i ]
             point.y = mpc_y[ i ]
@@ -426,34 +453,6 @@ class MPC( Node ):
         self.mpc_pub.publish(marker)
 
 
-    def displayPose( self, x, y ):
-
-        marker = Marker()
-        marker.header.frame_id = "map"  # Change frame if needed
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns = "sphere"
-        marker.id = 3
-        marker.type = Marker.SPHERE
-        marker.action = Marker.ADD
-
-        marker.pose.position.x = x
-        marker.pose.position.y = y
-        marker.pose.position.z = 0.0
-
-        marker.scale.x = 0.15  
-        marker.scale.y = 0.15 
-        marker.scale.z = 0.15 
-
-        # Set color (RGBA)
-        marker.color = ColorRGBA( r = 0.0, g = 1.0, b = 1.0, a = 1.0 )
-
-        # Set lifetime to zero (keeps marker indefinitely)
-        marker.lifetime.sec = 0
-        marker.lifetime.nanosec = 0
-
-        self.pose_pub.publish(marker)
-
-
 def main( args = None ):
     rclpy.init( args = args )
     print( "MPC Initialized" )
@@ -462,3 +461,7 @@ def main( args = None ):
 
     mpc_node.destroy_node()
     rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
