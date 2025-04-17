@@ -1,131 +1,125 @@
 import rclpy
-import numpy as np
 import pandas as pd
 from rclpy.node import Node
-from visualization_msgs.msg import Marker
-from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Point
+from visualization_msgs.msg import Marker
 
 
-class WaypointsMarker(Node):
+class WaypointsMarker( Node ):
+    """
+    Class that defines a ROS2 node that publishes markers of the reference racing line and the racing line of the car running MPC.
+    """
 
-    def __init__(self):
+    def __init__( self ):
+        """
+        Constructor for the WaypointsMarker class
+        """
 
-        super().__init__('waypoints_marker')
+        super().__init__( 'waypoints_marker' )
         
         self.line_pub = self.create_publisher( Marker, 'line_marker', 10 )
-        self.point_pub = self.create_publisher( Marker, 'waypoint_marker', 10 )
+        
+        # Read and parse CSV file for reference waypoints
+        df = pd.read_csv( './src/waypoints/waypoints_Levine_2.csv' )
+        self.ref_x = df[ 'x' ].to_numpy()
+        self.ref_y = df[ 'y' ].to_numpy()
+        self.points = self.generateRaceLine( self.ref_x, self.ref_y )
 
-        self.subscription = self.create_subscription(
-            Odometry,
-            'ego_racecar/odom',
-            self.updateOdom,
-            10)
+        # Read and parse CSV file for MPC waypoints
+        df2 = pd.read_csv( './src/waypoints/waypoints_MPC.csv' )
+        self.mpc_x = df2[ 'x' ].to_numpy()
+        self.mpc_y = df2[ 'y' ].to_numpy()
+        self.mpc_points = self.generateRaceLine( self.mpc_x, self.mpc_y )
         
-        self.pose_x = 0.0
-        self.pose_y = 0.0
-        
-        # Read and parse CSV file
-        df = pd.read_csv( './src/waypoints/waypoints.csv' )
-        self.x = df[ 'x' ].to_numpy()
-        self.y = df[ 'y' ].to_numpy()
-        self.points = self.generateRaceLine()
-        
-        # Publish marker periodically
+        # Publish markers periodically
         self.timer1 = self.create_timer( 1, self.publishRaceLine )
-        self.timer2 = self.create_timer( 0.2, self.publishWaypoint )
 
-        print( 'Waypoints loaded, publishing...' )
+        print( 'Waypoints loaded, publishing markers...' )
     
+    
+    def generateRaceLine( self, x, y ):
+        """
+        Generates an array of Point objects based on x and y coordinates.
 
-    def updateOdom( self, msg ):
-        self.pose_x = msg.pose.pose.position.x
-        self.pose_y = msg.pose.pose.position.y
-    
-    
-    def generateRaceLine(self):
+        Args:
+            x ( np.array ): array of x coordinates
+            y ( np.array ): array of y coordinates
+
+        Returns:
+            points ( list ): list of Points objects corresponding the the x and y coordinates
+        """
 
         points = []
 
-        for i in range( len( self.x ) ):
+        for i in range( len( x ) ):
             point = Point()
-            point.x = self.x[ i ]
-            point.y = self.y[ i ]
-            point.z = 0.0  # Set z = 0 for 2D
+            point.x = x[ i ]
+            point.y = y[ i ]
+            point.z = 0.0 
             points.append(point)
 
         return points
 
 
-    def publishRaceLine(self):
+    def publishRaceLine( self ):
+        """
+        Publishes 2 ROS2 messages to topic /line_marker. 
+        The first message is a marker for the reference raceline. 
+        The second message is a marker for the racing line that the car followef using MPC.
+        """
 
-        marker = Marker()
-        marker.header.frame_id = "map"  # Change frame if needed
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns = "line_strip"
-        marker.id = 0
-        marker.type = Marker.LINE_STRIP
-        marker.action = Marker.ADD
-        marker.scale.x = 0.075  # Line width
-
-        # Set color (RGBA)
-        marker.color = ColorRGBA(r=0.1176, g=0.6471, b=0.7255, a=1.0)
-
-        # Set lifetime to zero (keeps marker indefinitely)
-        marker.lifetime.sec = 0
-        marker.lifetime.nanosec = 0
-
-        marker.points = self.points
-
-        self.line_pub.publish(marker)
-
-    
-    def publishWaypoint( self ):
-
-        d = np.sqrt( ( self.x - self.pose_x ) ** 2 + ( self.y - self.pose_y ) ** 2 )
-        i = np.argmin( d )
-
-        while True:
-            i = ( i + 1 ) % 253
-
-            if d[ i ] > 2:
-                i = ( i + 253 ) % 253
-                break
-
-        marker = Marker()
-        marker.header.frame_id = "map"  # Change frame if needed
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns = "sphere"
-        marker.id = 1
-        marker.type = Marker.SPHERE
-        marker.action = Marker.ADD
-
-        marker.pose.position.x = self.x[i]
-        marker.pose.position.y = self.y[i]
-        marker.pose.position.z = 0.0
-
-        marker.scale.x = 0.25  
-        marker.scale.y = 0.25 
-        marker.scale.z = 0.25 
+        # Marker 1: reference waypoints
+        marker1 = Marker()
+        marker1.header.frame_id = "map" 
+        marker1.header.stamp = self.get_clock().now().to_msg()
+        marker1.ns = "line_strip"
+        marker1.id = 0
+        marker1.type = Marker.LINE_STRIP
+        marker1.action = Marker.ADD
+        marker1.scale.x = 0.075  # Line width
 
         # Set color (RGBA)
-        marker.color = ColorRGBA( r = 1.0, g = 0.0, b = 0.0, a = 1.0 )
+        marker1.color = ColorRGBA( r = 1.0, g = 0.0, b = 0.0, a = 1.0 )
 
         # Set lifetime to zero (keeps marker indefinitely)
-        marker.lifetime.sec = 0
-        marker.lifetime.nanosec = 0
+        marker1.lifetime.sec = 0
+        marker1.lifetime.nanosec = 0
 
-        self.point_pub.publish(marker)
+        marker1.points = self.points
+
+        self.line_pub.publish( marker1 )
+
+        # Marker 2: MPC trajectory waypoints
+        marker2 = Marker()
+        marker2.header.frame_id = "map"  
+        marker2.header.stamp = self.get_clock().now().to_msg()
+        marker2.ns = "line_strip"
+        marker2.id = 1
+        marker2.type = Marker.LINE_STRIP
+        marker2.action = Marker.ADD
+        marker2.scale.x = 0.075  # Line width
+
+        # Set color (RGBA)
+        marker2.color = ColorRGBA( r = 0.0, g = 0.0, b = 1.0, a = 1.0 )
+
+        # Set lifetime to zero (keeps marker indefinitely)
+        marker2.lifetime.sec = 0
+        marker2.lifetime.nanosec = 0
+
+        marker2.points = self.mpc_points
+
+        self.line_pub.publish( marker2 )
 
 
-def main(args=None):
+def main( args = None ):
 
-    rclpy.init(args=args)
+    rclpy.init( args = args )
     node = WaypointsMarker()
-    rclpy.spin(node)
+    rclpy.spin( node )
     node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

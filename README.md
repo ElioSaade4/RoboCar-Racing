@@ -98,10 +98,20 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
 The car can be moved by clicking on keyboard keys while in this session as described in the image.
 
-## Running the MPC node
+## Run the waypoints_logger node
+```
+ros2 run waypoints waypoints_logger
+```
+
+## Run the waypoints_marker node
+```
+ros2 run waypoints waypoints_marker
+```
+
+## Run the MPC node
 To start the MPC controller, open a new bash session and type the following command:
 ```
-ros2 run mpc mpc
+ros2 run mpc mpc_node
 ```
 
 ## Start live telemetry with Foxglove

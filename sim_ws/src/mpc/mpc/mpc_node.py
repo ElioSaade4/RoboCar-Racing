@@ -75,7 +75,7 @@ class MPC( Node ):
         self.dt_pub = self.create_publisher( Float32, 'delta_t', 10 )
 
         # Load waypoints from csv file
-        df = pd.read_csv( './src/waypoints/newwaypoints.csv' )
+        df = pd.read_csv( './src/waypoints/waypoints_Levine_2.csv' )
         self.waypoints_x = df[ 'x' ]
         self.waypoints_y = df[ 'y' ]
         self.waypoints_v = df[ 'v' ]
