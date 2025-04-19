@@ -14,7 +14,17 @@
 
 
 # Outline
-This repo includes the codebase for the final project for EEE 587 - Optimal Control. It implements a Model Predictive Controller for an RC car in the context of the F1Tenth competition. The controller follows a reference racing line and therefore allows the car to drive autonomously in qualifying format.
+This repo includes the codebase for the final project for EEE 587 - Optimal Control, entitled **Model Predictive Control for F1Tenth Autonomous Racing**. It implements a Model Predictive Controller for an RC car in the context of the F1Tenth competition. The controller follows a reference racing line and therefore allows the car to drive autonomously in qualifying format.
+
+The repository is organized as follows:
+- **README Images:** includes all the images of this README file
+- **recording:** folder that includes a ROS bag recording of a simulation run, which can be opened and replayed in Foxglove.
+- **sim_ws**: folder that includes all the code of the project. It incldues the following 3 folders:
+  - **f1tenth_gym_ros:** ROS2 python package that includes the ros bridge to the F1Tenth Gym and the keyboard teleoperations node. **This package is available open-source along with the F1Tenth Gym and was not developed by me.**
+  - **mpc:** ROS2 python package that include the code for *mpc_node* which implements the MPC.
+  - **waypoints:** ROS2 python package that includes the code for *waypoints_logger* and *waypoints_marker* nodes.
+- **Dockerfile:** defines the image of the **sim-1** Docker container.
+- **docker-compose.yml:** defines the structure of the multi-container Docker application, along with the containers, images, memory volume and port mappings.
 
 # Software Requirements
 - Docker Desktop (Necessary to run simulations)
@@ -25,9 +35,9 @@ This repo includes the codebase for the final project for EEE 587 - Optimal Cont
 
 The simulation setup consists of 2 Docker containers (services) running as part of a Docker application. Docker was needed because ROS requires Linux to run and I have a Windows machine, so 2 options were available: use a Linux Virutal Machine (or WSL) or use Docker. Docker was chosen because it seemed more popular in the robotics community and it makes it much easier to share the whole simulation environment.
 
-The first service **(sim-1)** is built based on a custom Docker image which is defined in the **Dockerfile** file. This custom image starts from the **ros:iron** image and adds to it a python installation with the needed dependencies as well as a copy of the F1Tenth Gym environment. This service is where the simulation runs and where ROS2 nodes interact with the F1Tenth Gym. The folder **sim_ws** inside the container running **sim-1** is mapped to the local folder **sim_ws** where this repo gets cloned; so any change inside the container appears in local memory and vice versa. This allows file exchange and the development of ROS2 code that runs inside the container. Also, port 8080 in this container is mapped to port 8080 of the computer, and port 8765 of the container is mapped to port 8765 of the computer.
+The first service **(sim-1)** is built based on a custom Docker image which is defined in the **Dockerfile** file. This custom image starts from the **ros:iron** image and adds to it a python installation with the needed dependencies as well as a copy of the F1Tenth Gym environment. This service is where the simulation runs and where ROS2 nodes interact with the F1Tenth Gym. The folder **sim_ws** inside the container running **sim-1** is mapped to the host system folder **sim_ws** where this repo gets cloned; so any change inside the container appears in the host memory and vice versa. This allows file exchange and the development of ROS2 code that runs inside the container. Also, port 8765 of the container is mapped to port 8765 of the computer.
 
-The second service **(novnc-1)** is built from the readily available **theasp/novnc:latest** image. This container gets the messages of all the topics from **sim-1** and runs RVIZ in an HTML interface and makes it available for remote access by the computer at port 8080 using noVNC. This service is not required to be running all the time: if the goal is to get live telemetry in Foxglove or to record a ROS bag to replay in Foxglove, **(novnc-1)** can be stopped.
+The second service **(novnc-1)** is built from the readily available **theasp/novnc:latest** image. This container provides a remote connection at port 8080 using noVNC to RVIZ which is running in **sim-1**. To make that possible, port 8080 in this container is mapped to port 8080 of the computer. This service is not required to be running all the time: it is only needed to view the visualization in RVIZ. If the goal is to get live telemetry in Foxglove or to record a ROS bag to replay in Foxglove, **(novnc-1)** can be stopped.
 
 # Building the Docker Application (ONCE)
 To set up the simulation environment above, the Docker containers for the 2 services need to be built based on their respective images, then need to be combined into one application. The **Dockerfile** file defines the image for **sim-1** and **docker-compose.yml** consists the blueprint for building the muli-container application, including the services, images, memory mappings, and ports mappings.
